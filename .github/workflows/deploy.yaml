@@ -32,21 +32,21 @@ jobs:
     # --- build & push dispatcher ---
     - name: Build & push dispatcher
       run: |
-        docker build -t $REPO/$PROJECT_ID/assistant/dispatcher:latest -f apps/dispatcher/Dockerfile .
-        docker push  $REPO/$PROJECT_ID/assistant/dispatcher:latest
+        docker build -t $REPO/$PROJECT_ID/assistant-images/dispatcher:latest -f apps/dispatcher/Dockerfile .
+        docker push  $REPO/$PROJECT_ID/assistant-images/dispatcher:latest
 
     # --- build & push echo-agent ---
     - name: Build & push echo-agent
       run: |
-        docker build -t $REPO/$PROJECT_ID/assistant/echo-agent:latest -f apps/echo_agent/Dockerfile .
-        docker push  $REPO/$PROJECT_ID/assistant/echo-agent:latest
+        docker build -t $REPO/$PROJECT_ID/assistant-images/echo-agent:latest -f apps/echo_agent/Dockerfile .
+        docker push  $REPO/$PROJECT_ID/assistant-images/echo-agent:latest
 
     # --- deploy both services ---
     - name: Deploy to Cloud Run
       run: |
         gcloud run deploy assistant-dispatcher \
-          --image $REPO/$PROJECT_ID/assistant/dispatcher:latest \
+          --image $REPO/$PROJECT_ID/assistant-images/dispatcher:latest \
           --region $REGION --platform managed --quiet
         gcloud run deploy echo-agent \
-          --image $REPO/$PROJECT_ID/assistant/echo-agent:latest \
+          --image $REPO/$PROJECT_ID/assistant-images/echo-agent:latest \
           --region $REGION --platform managed --quiet
