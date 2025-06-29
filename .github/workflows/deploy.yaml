@@ -4,56 +4,44 @@ on:
   push:
     branches: [ "main" ]
 
-env:                                   # <-- keep your project ID in one place
-  PROJECT_ID: ${{ secrets.GCP_PROJECT }}   # add this secret in the repo settings
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}   # you already added this
   REGION: us-central1
-  REPO:  us-central1-docker.pkg.dev     # Artifact Registry host
+  REPO: us-central1-docker.pkg.dev
 
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write                  # needed for Workload Identity auth
-
     steps:
-    # 1️⃣  Checkout the code
     - uses: actions/checkout@v4
 
-    # 2️⃣  Authenticate to Google Cloud (WIF is the cleanest; use a key file if you prefer)
-    - uses: google-github-actions/auth@v2
+    # ✅ Authenticate with the JSON key you stored in GCP_SA_KEY
+    - name: Authenticate to GCP
+      uses: google-github-actions/auth@v2
       with:
-        workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-        service_account: ${{ secrets.SA_EMAIL }}
+        credentials_json: '${{ secrets.GCP_SA_KEY }}'
 
     - uses: google-github-actions/setup-gcloud@v2
       with:
-        install_components: 'beta'
+        project_id: ${{ env.PROJECT_ID }}
+        install_components: docker-credential-gcr
 
-    # 3️⃣  Enable Docker Buildx
-    - uses: docker/setup-buildx-action@v3
-
-    # 4️⃣  Allow Docker to push to Artifact Registry
     - name: Configure docker auth
       run: gcloud auth configure-docker $REPO --quiet
 
-    # 5️⃣  Build & push **dispatcher** image
-    - name: Build & push dispatcher image
+    # --- build & push dispatcher ---
+    - name: Build & push dispatcher
       run: |
-        docker build \
-          -t $REPO/$PROJECT_ID/assistant/dispatcher:latest \
-          -f apps/dispatcher/Dockerfile .
-        docker push $REPO/$PROJECT_ID/assistant/dispatcher:latest
+        docker build -t $REPO/$PROJECT_ID/assistant/dispatcher:latest -f apps/dispatcher/Dockerfile .
+        docker push  $REPO/$PROJECT_ID/assistant/dispatcher:latest
 
-    # 6️⃣  Build & push **echo-agent** image
-    - name: Build & push echo-agent image
+    # --- build & push echo-agent ---
+    - name: Build & push echo-agent
       run: |
-        docker build \
-          -t $REPO/$PROJECT_ID/assistant/echo-agent:latest \
-          -f apps/echo_agent/Dockerfile .
-        docker push $REPO/$PROJECT_ID/assistant/echo-agent:latest
+        docker build -t $REPO/$PROJECT_ID/assistant/echo-agent:latest -f apps/echo_agent/Dockerfile .
+        docker push  $REPO/$PROJECT_ID/assistant/echo-agent:latest
 
-    # 7️⃣  Deploy both services to Cloud Run
+    # --- deploy both services ---
     - name: Deploy to Cloud Run
       run: |
         gcloud run deploy assistant-dispatcher \
@@ -62,4 +50,3 @@ jobs:
         gcloud run deploy echo-agent \
           --image $REPO/$PROJECT_ID/assistant/echo-agent:latest \
           --region $REGION --platform managed --quiet
-
