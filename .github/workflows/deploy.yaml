@@ -52,3 +52,18 @@ jobs:
           --image $REPO/$PROJECT_ID/assistant-images/echo-agent:latest \
           --region $REGION --platform managed --quiet \
           --service-account echo-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
+
+    - name: Build & push mediator image
+      run: |
+        docker build -t gcr.io/$PROJECT_ID/mediator -f apps/mediator/Dockerfile .
+        docker push gcr.io/$PROJECT_ID/mediator
+
+    - name: Deploy mediator to Cloud Run
+      run: |
+        gcloud run deploy mediator-agent \
+          --image gcr.io/$PROJECT_ID/mediator \
+          --region=us-central1 \
+          --platform=managed \
+          --allow-unauthenticated \
+          --quiet
+          
