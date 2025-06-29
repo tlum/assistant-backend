@@ -50,5 +50,5 @@ jobs:
           --service-account dispatcher-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
         gcloud run deploy echo-agent \
           --image $REPO/$PROJECT_ID/assistant-images/echo-agent:latest \
-          --region $REGION --platform managed --quiet
+          --region $REGION --platform managed --quiet \
           --service-account echo-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
