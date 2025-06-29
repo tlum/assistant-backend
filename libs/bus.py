@@ -73,21 +73,6 @@ _TOPIC_PATH = _publisher.topic_path(PROJECT_ID, TOPIC_ID)
 _SUB_ID = os.getenv("MEDIATOR_SUB", "assistant-mediator")  # one shared pull sub
 _SUB_PATH = _subscriber.subscription_path(PROJECT_ID, _SUB_ID)
 
-def _ensure_subscription() -> None:
-    """Create the pull‑subscription exactly once if it doesn't exist."""
-    try:
-        _subscriber.get_subscription(request={"subscription": _SUB_PATH})
-    except Exception:
-        _subscriber.create_subscription(
-            request={
-                "name": _SUB_PATH,
-                "topic": _TOPIC_PATH,
-                "ack_deadline_seconds": 30,
-            }
-        )
-
-_ensure_subscription()
-
 @asynccontextmanager
 async def _pull(max_messages: int = 20, timeout: float = 1.0):
     """Async context manager that pulls up to *max_messages* within *timeout*.
