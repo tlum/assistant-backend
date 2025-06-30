@@ -100,13 +100,37 @@ async def completions(
 
     # 7 ▸ Return OpenAI-style response
     return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+        "object": "chat.completion",
+        "created": int(asyncio.get_event_loop().time()),
+        "model": "mediator-v0.1",          # your internal model tag
         "choices": [
             {
+                "index": 0,
                 "message": {
                     "role": "assistant",
                     "content": reply,
-                }
+                    "refusal": None,
+                    "annotations": [],
+                },
+                "logprobs": None,
+                "finish_reason": "stop",
             }
-        ]
+        ],
+        "usage": {
+            "prompt_tokens": 0,            # fill real counts later
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "audio_tokens": 0,
+            },
+            "completion_tokens_details": {
+                "reasoning_tokens": 0,
+                "audio_tokens": 0,
+                "accepted_prediction_tokens": 0,
+                "rejected_prediction_tokens": 0,
+            },
+        },
+        "service_tier": "default",
     }
-
