@@ -55,8 +55,8 @@ jobs:
 
     - name: Build & push mediator image
       run: |
-        docker build -t gcr.io/$PROJECT_ID/mediator -f apps/mediator/Dockerfile .
-        docker push gcr.io/$PROJECT_ID/mediator
+        docker build -t $REPO/$PROJECT_ID/assistant-images/mediator:latest -f apps/mediator/Dockerfile .
+        docker push $REPO/$PROJECT_ID/assistant-images/mediator:latest
 
     - name: Deploy mediator to Cloud Run
       run: |
