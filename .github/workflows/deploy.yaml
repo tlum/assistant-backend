@@ -55,7 +55,7 @@ jobs:
         gcloud run deploy assistant-dispatcher \
           --image $REPO/$PROJECT_ID/assistant-images/dispatcher:latest \
           --region $REGION --platform managed --allow-unauthenticated --quiet \
-          --update-secrets "OPENAI_API_KEY=OPENAI_API_KEY:latest" \
+          --update-secrets "OPENAI_API_KEY=openai-api-key:latest" \
           --service-account dispatcher-sa@$PROJECT_ID.iam.gserviceaccount.com
 
         gcloud run deploy echo-agent \
@@ -66,6 +66,6 @@ jobs:
         gcloud run deploy mediator-agent \
           --image $REPO/$PROJECT_ID/assistant-images/mediator:latest \
           --region $REGION --platform managed --allow-unauthenticated --quiet \
-          --update-secrets "OPENAI_API_KEY=OPENAI_API_KEY:latest" \
+          --update-secrets "OPENAI_API_KEY=openai-api-key:latest" \
           --service-account mediator-sa@$PROJECT_ID.iam.gserviceaccount.com
 
