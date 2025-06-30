@@ -40,7 +40,7 @@ async def gather_agent_notes(correlation_id: str, timeout: float = 0.4) -> str:
 @app.post("/v1/chat/completions")
 async def completions(
     req: Request,
-    x_api_key: str = Header(None, convert_underscores=False),
+    x_api_key: str = Header(...),
 ):
     # ─── API-key check ────────────────────────────────────────────────────────
     if x_api_key != MEDIATOR_API_KEY:
