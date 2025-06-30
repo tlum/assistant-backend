@@ -2,3 +2,6 @@ fastapi
 uvicorn
 google-cloud-pubsub
 google-cloud-firestore
+langchain
+langchain-openai
+python-dotenv
