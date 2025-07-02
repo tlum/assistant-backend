@@ -1,5 +1,5 @@
 # apps/mediator/main.py
-# MediatorAgent – POST /v1/chat/completions (OpenAI-style w/ optional streaming)
+# MediatorAgent – POST /v1/chat/completions (OpenAI-compatible)
 
 import os, asyncio, uuid, logging, time, itertools, json
 from typing import Optional, List, Dict, Any
@@ -8,11 +8,8 @@ from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from libs.bus import publish, subscribe_once
-from libs.llm import chat
-from libs import tracer
-from tiktoken import get_encoding
-
-enc = get_encoding("cl100k_base")
+from libs.llm import chat_completion
+from libs import tracer, tools
 
 # ───────────────────────── CONFIG ────────────────────────────
 MEDIATOR_API_KEY = os.getenv("MEDIATOR_API_KEY", "")
@@ -57,46 +54,81 @@ def _extract_user_message(body: Dict[str, Any]) -> str:
 async def completions(req: Request, authorization: str | None = Header(None)):
     trace_id = tracer.new_id()
     wall_start = time.time()
-
     _require_api_key(authorization)
 
     body: Dict[str, Any] = await req.json()
     user_msg = _extract_user_message(body)
     tracer.write("mediator_calls", trace_id, vapi_request=body)
 
+    # Fan-out user msg to downstream agents
     corr_id = uuid.uuid4().hex
     await publish({"id": corr_id, "type": "NEW_USER_MSG", "payload": {"text": user_msg}})
 
     notes = await gather_agent_notes(corr_id)
 
-    prompt = (
-        f"User said:\n{user_msg}\n\n"
-        f"Helper notes:\n{notes or '(none)'}\n\n"
-        "Craft the best single-turn assistant reply."
+    # ── Build outbound messages list ──────────────────────────
+    outbound_msgs: List[Dict[str, Any]] = body["messages"]
+    if notes:
+        outbound_msgs.append({"role": "system", "content": f"Helper notes:\n{notes}"})
+
+    # ── Build tool schema if Vapi provided tools ──────────────
+    functions_schema = None
+    if body.get("tools"):
+        wanted = {t["function"]["name"] for t in body["tools"]}
+        functions_schema = [s for s in tools.json_schema() if s["name"] in wanted]
+
+    # ── First LLM call (may request a tool) ───────────────────
+    openai_resp = await chat_completion(
+        messages=outbound_msgs,
+        temperature=body.get("temperature", 1),
+        stream=False,
+        functions=functions_schema,
     )
-    tracer.write("openai_calls", trace_id, prompt=prompt)
 
-    reply = await chat(prompt)
-    tracer.write("openai_calls", trace_id, reply=reply)
+    first_msg = openai_resp.choices[0].message
+    # Default reply content—may be overwritten after tool execution
+    reply_content = first_msg.get("content", "")
+    usage_dict = openai_resp.usage._asdict()
 
-    # re-broadcast final bot reply
-    await publish({"id": corr_id, "type": "BOT_REPLY", "payload": {"text": reply}})
+    if first_msg.get("function_call"):
+        fc = first_msg.function_call
+        tool_result = tools.call(fc.name, json.loads(fc.arguments or "{}"))
 
-    # token counts (approx)
-    prompt_t = len(enc.encode(prompt))
-    completion_t = len(enc.encode(reply))
+        follow_msgs = (
+            outbound_msgs
+            + [first_msg]  # assistant message with function_call
+            + [{"role": "tool", "name": fc.name, "content": tool_result}]
+        )
+
+        openai_resp = await chat_completion(
+            messages=follow_msgs,
+            temperature=body.get("temperature", 1),
+            stream=False,
+        )
+        reply_content = openai_resp.choices[0].message.content
+        usage_dict = openai_resp.usage._asdict()
+
+    # Publish final bot reply on the bus
+    await publish({"id": corr_id, "type": "BOT_REPLY", "payload": {"text": reply_content}})
+
+    tracer.write(
+        "openai_calls",
+        trace_id,
+        request={"model": openai_resp.model, "messages": outbound_msgs},
+        usage=usage_dict,
+    )
 
     envelope = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
         "created": int(time.time()),
-        "model": "mediator-v0.1",
+        "model": openai_resp.model,
         "choices": [
             {
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": reply,
+                    "content": reply_content,
                     "refusal": None,
                     "annotations": [],
                 },
@@ -104,18 +136,7 @@ async def completions(req: Request, authorization: str | None = Header(None)):
                 "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": prompt_t,
-            "completion_tokens": completion_t,
-            "total_tokens": prompt_t + completion_t,
-            "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
-            "completion_tokens_details": {
-                "reasoning_tokens": 0,
-                "audio_tokens": 0,
-                "accepted_prediction_tokens": 0,
-                "rejected_prediction_tokens": 0,
-            },
-        },
+        "usage": usage_dict,
         "service_tier": "default",
     }
 
@@ -126,8 +147,8 @@ async def completions(req: Request, authorization: str | None = Header(None)):
         latency_ms=int((time.time() - wall_start) * 1000),
     )
 
-    # ─── STREAMING RESPONSE ───────────────────────────────────
-    if body.get("stream"):
+    # ─── STREAMING (content chunks only, no tool call in stream path yet) ──
+    if body.get("stream") and not first_msg.get("function_call"):
         def sse_chunks():
             role_chunk = {
                 "id": envelope["id"],
@@ -135,13 +156,18 @@ async def completions(req: Request, authorization: str | None = Header(None)):
                 "created": envelope["created"],
                 "model": envelope["model"],
                 "choices": [
-                    {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant"},
+                        "finish_reason": None,
+                    }
                 ],
             }
             yield f"data: {json.dumps(role_chunk)}\n\n"
 
             for part in itertools.islice(
-                (reply[i : i + 40] for i in range(0, len(reply), 40)), None
+                (reply_content[i : i + 40] for i in range(0, len(reply_content), 40)),
+                None,
             ):
                 chunk = {
                     "id": envelope["id"],
@@ -149,7 +175,11 @@ async def completions(req: Request, authorization: str | None = Header(None)):
                     "created": envelope["created"],
                     "model": envelope["model"],
                     "choices": [
-                        {"index": 0, "delta": {"content": part}, "finish_reason": None}
+                        {
+                            "index": 0,
+                            "delta": {"content": part},
+                            "finish_reason": None,
+                        }
                     ],
                 }
                 yield f"data: {json.dumps(chunk)}\n\n"
@@ -170,4 +200,3 @@ async def completions(req: Request, authorization: str | None = Header(None)):
 
     # ─── SINGLE-SHOT RESPONSE ─────────────────────────────────
     return JSONResponse(envelope)
-

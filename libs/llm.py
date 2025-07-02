@@ -1,29 +1,33 @@
 # libs/llm.py
 #
-# Small helper so every agent can make a single chat-completion call
-# without repeating boilerplate.  Switch the model_name or base_url
-# any time you like.
+# Thin, dependency-free wrapper around the official OpenAI async client.
+# • One place to set your default production model
+# • Supports streaming and future function-calling
+# • Returns the raw OpenAI response object (with .usage, .model, etc.)
 
-from langchain_openai import ChatOpenAI
+from openai import AsyncOpenAI
+from typing import List, Dict, Any, Optional
 
-_llm = ChatOpenAI(
-    model_name="gpt-4.1-nano-2025-04-14",
-    temperature=0.3,
-    # If you’ll host your own model gateway later, add:
-    # base_url="https://my-gateway/v1",
-)
-
-async def chat(prompt: str) -> str:
-    """Return one assistant message for the given prompt."""
-    resp = await _llm.ainvoke(prompt)
-    return resp.content.strip()
+client = AsyncOpenAI()  # Needs OPENAI_API_KEY in env
+DEFAULT_MODEL = "gpt-4.1-nano-2025-04-14"
 
 
-# Optional helper used by echo-agent’s first demo
-async def get_thought(user_msg: str) -> str:
-    prompt = (
-        f"As a helpful assistant, reply with one short 'thought' about: "
-        f"{user_msg!r}"
+async def chat_completion(
+    messages: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    temperature: float = 1.0,
+    stream: bool = False,
+    functions: Optional[List[Dict[str, Any]]] = None,
+):
+    """
+    Async wrapper for openai.chat.completions.create().
+    Returns the raw OpenAI response.
+    """
+    return await client.chat.completions.create(
+        model=model or DEFAULT_MODEL,
+        messages=messages,
+        temperature=temperature,
+        stream=stream,
+        functions=functions or None,
     )
-    return await chat(prompt)
 
