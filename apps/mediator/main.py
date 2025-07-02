@@ -81,7 +81,7 @@ async def completions(req: Request, authorization: str | None = Header(None)):
         messages=outbound_msgs,
         temperature=body.get("temperature", 1),
         stream=False,
-        functions=functions_schema,
+        tools=functions_schema,          # ← NEW PARAM NAME
     )
 
     first_msg = openai_resp.choices[0].message
@@ -89,16 +89,19 @@ async def completions(req: Request, authorization: str | None = Header(None)):
     usage_dict = openai_resp.usage.model_dump()
     
     # ─── Tool call branch ─────────────────────────────────────
-    if first_msg.function_call:
-        fc = first_msg.function_call
-        tool_result = tools.call(fc.name, json.loads(fc.arguments or "{}"))
-
+    if first_msg.tool_calls:
+        fc = first_msg.tool_calls[0]      # support multi-call later
+        args = json.loads(fc.function.arguments or "{}")
+        tool_result = tools.call(fc.function.name, args)
         follow_msgs = (
             outbound_msgs
-            + [first_msg]  # assistant w/ function_call
-            + [{"role": "tool", "name": fc.name, "content": tool_result}]
+            + [first_msg]
+            + [{
+                "role": "tool",
+                "tool_call_id": fc.id,     # mandatory!
+                "content": tool_result
+            }]
         )
-
         openai_resp = await chat_completion(
             messages=follow_msgs,
             temperature=body.get("temperature", 1),

@@ -17,7 +17,7 @@ async def chat_completion(
     model: Optional[str] = None,
     temperature: float = 1.0,
     stream: bool = False,
-    functions: Optional[List[Dict[str, Any]]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
 ):
     """
     Async wrapper for openai.chat.completions.create().
@@ -28,6 +28,6 @@ async def chat_completion(
         messages=messages,
         temperature=temperature,
         stream=stream,
-        functions=functions or None,
-    )
+        tools=tools or None,
+)
 
