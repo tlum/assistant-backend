@@ -86,8 +86,8 @@ async def completions(req: Request, authorization: str | None = Header(None)):
 
     first_msg = openai_resp.choices[0].message
     reply_content = first_msg.content or ""        # may be None if function_call
-    usage_dict = openai_resp.usage._asdict()
-
+    usage_dict = openai_resp.usage.model_dump()
+    
     # ─── Tool call branch ─────────────────────────────────────
     if first_msg.function_call:
         fc = first_msg.function_call
@@ -106,7 +106,7 @@ async def completions(req: Request, authorization: str | None = Header(None)):
         )
         second_msg = openai_resp.choices[0].message
         reply_content = second_msg.content or ""
-        usage_dict = openai_resp.usage._asdict()
+        usage_dict = openai_resp.usage.model_dump()
 
     # Publish final bot reply
     await publish({"id": corr_id, "type": "BOT_REPLY", "payload": {"text": reply_content}})
