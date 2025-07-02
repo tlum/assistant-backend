@@ -71,17 +71,20 @@ async def completions(req: Request, authorization: str | None = Header(None)):
         outbound_msgs.append({"role": "system", "content": f"Helper notes:\n{notes}"})
 
     # Function schema allowed for this call
-    functions_schema = None
+    tools_schema = None
     if body.get("tools"):
-        wanted = {t["function"]["name"] for t in body["tools"]}
-        functions_schema = [s for s in tools.json_schema() if s["name"] in wanted]
-
+        wanted = {t["function"]["name"] for t in body["tools"] if t.get("function")}
+        tools_schema = [
+            {"type": "function", "function": s}          # ← wrap each schema
+            for s in tools.json_schema()
+            if s["name"] in wanted
+        ]
     # ─── First LLM call ───────────────────────────────────────
     openai_resp = await chat_completion(
         messages=outbound_msgs,
         temperature=body.get("temperature", 1),
         stream=False,
-        tools=functions_schema,          # ← NEW PARAM NAME
+        tools=tools_schema,
     )
 
     first_msg = openai_resp.choices[0].message
