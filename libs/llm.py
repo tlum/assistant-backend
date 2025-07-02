@@ -7,7 +7,7 @@
 from langchain_openai import ChatOpenAI
 
 _llm = ChatOpenAI(
-    model_name="gpt-3.5-turbo",
+    model_name="gpt-4.1-nano-2025-04-14",
     temperature=0.3,
     # If you’ll host your own model gateway later, add:
     # base_url="https://my-gateway/v1",
