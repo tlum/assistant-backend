@@ -5,3 +5,4 @@ google-cloud-firestore
 langchain
 langchain-openai
 python-dotenv
+tiktoken

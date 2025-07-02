@@ -1,12 +1,15 @@
 # apps/mediator/main.py
 # MediatorAgent – exposes POST /v1/chat/completions (OpenAI-style)
 
-import os, asyncio, uuid, logging
+import os, asyncio, uuid, logging, time
 from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Request, Header, HTTPException
 from libs.bus import publish, subscribe_once        # already in repo
 from libs.llm import chat                           # already in repo
+from libs import tracer
+from tiktoken import get_encoding
+enc = get_encoding("cl100k_base")
 
 # ──────────────────────────────────────────────────────────────
 # CONFIG
@@ -60,12 +63,18 @@ async def completions(
     req: Request,
     authorization: str | None = Header(None),
 ):
+    # 0 ▸ baseline trace doc
+    trace_id = tracer.new_id()
+    t0 = time.time()
+
     # 1 ▸ API-key auth
     _require_api_key(authorization)
 
     # 2 ▸ Parse request body
     body: Dict[str, Any] = await req.json()
     user_msg: str = _extract_user_message(body)
+
+    tracer.write("mediator_calls", trace_id, vapi_request=body)
 
     corr_id: str = str(uuid.uuid4())
 
@@ -87,7 +96,14 @@ async def completions(
         f"Helper notes:\n{notes or '(none)'}\n\n"
         "Craft the best single-turn assistant reply."
     )
+
+    # — log prompt sent to OpenAI
+    tracer.write("openai_calls", trace_id, prompt=prompt)
+
     reply: str = await chat(prompt)
+
+    # — log OpenAI raw reply (we only have text; no usage yet)
+    tracer.write("openai_calls", trace_id, reply=reply)
 
     # 6 ▸ Publish BOT_REPLY for logging / other consumers
     await publish(
@@ -98,11 +114,14 @@ async def completions(
         }
     )
 
-    # 7 ▸ Return OpenAI-style response
-    return {
+    # token counts (rough)  – replace with real tokenizer later
+    prompt_t = len(enc.encode(prompt))
+    completion_t = len(enc.encode(reply))
+
+    envelope = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
-        "created": int(asyncio.get_event_loop().time()),
+        "created": int(time.time()),
         "model": "mediator-v0.1",          # your internal model tag
         "choices": [
             {
@@ -118,9 +137,9 @@ async def completions(
             }
         ],
         "usage": {
-            "prompt_tokens": 0,            # fill real counts later
-            "completion_tokens": 0,
-            "total_tokens": 0,
+            "prompt_tokens": prompt_t,
+            "completion_tokens": completion_t,
+            "total_tokens": prompt_t + completion_t,
             "prompt_tokens_details": {
                 "cached_tokens": 0,
                 "audio_tokens": 0,
@@ -134,3 +153,12 @@ async def completions(
         },
         "service_tier": "default",
     }
+    
+    tracer.write(
+        "mediator_calls",
+        trace_id,
+        vapi_response=envelope,
+        latency_ms=int((time.time() - t0) * 1000),
+    )
+
+    return envelope
