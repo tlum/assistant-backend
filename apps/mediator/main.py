@@ -60,24 +60,23 @@ async def completions(req: Request, authorization: str | None = Header(None)):
     user_msg = _extract_user_message(body)
     tracer.write("mediator_calls", trace_id, vapi_request=body)
 
-    # Fan-out user msg to downstream agents
     corr_id = uuid.uuid4().hex
     await publish({"id": corr_id, "type": "NEW_USER_MSG", "payload": {"text": user_msg}})
 
     notes = await gather_agent_notes(corr_id)
 
-    # ── Build outbound messages list ──────────────────────────
-    outbound_msgs: List[Dict[str, Any]] = body["messages"]
+    # Build outbound messages (preserving original order)
+    outbound_msgs = body["messages"].copy()
     if notes:
         outbound_msgs.append({"role": "system", "content": f"Helper notes:\n{notes}"})
 
-    # ── Build tool schema if Vapi provided tools ──────────────
+    # Function schema allowed for this call
     functions_schema = None
     if body.get("tools"):
         wanted = {t["function"]["name"] for t in body["tools"]}
         functions_schema = [s for s in tools.json_schema() if s["name"] in wanted]
 
-    # ── First LLM call (may request a tool) ───────────────────
+    # ─── First LLM call ───────────────────────────────────────
     openai_resp = await chat_completion(
         messages=outbound_msgs,
         temperature=body.get("temperature", 1),
@@ -86,17 +85,17 @@ async def completions(req: Request, authorization: str | None = Header(None)):
     )
 
     first_msg = openai_resp.choices[0].message
-    # Default reply content—may be overwritten after tool execution
-    reply_content = first_msg.get("content", "")
+    reply_content = first_msg.content or ""        # may be None if function_call
     usage_dict = openai_resp.usage._asdict()
 
-    if first_msg.get("function_call"):
+    # ─── Tool call branch ─────────────────────────────────────
+    if first_msg.function_call:
         fc = first_msg.function_call
         tool_result = tools.call(fc.name, json.loads(fc.arguments or "{}"))
 
         follow_msgs = (
             outbound_msgs
-            + [first_msg]  # assistant message with function_call
+            + [first_msg]  # assistant w/ function_call
             + [{"role": "tool", "name": fc.name, "content": tool_result}]
         )
 
@@ -105,10 +104,11 @@ async def completions(req: Request, authorization: str | None = Header(None)):
             temperature=body.get("temperature", 1),
             stream=False,
         )
-        reply_content = openai_resp.choices[0].message.content
+        second_msg = openai_resp.choices[0].message
+        reply_content = second_msg.content or ""
         usage_dict = openai_resp.usage._asdict()
 
-    # Publish final bot reply on the bus
+    # Publish final bot reply
     await publish({"id": corr_id, "type": "BOT_REPLY", "payload": {"text": reply_content}})
 
     tracer.write(
@@ -147,56 +147,63 @@ async def completions(req: Request, authorization: str | None = Header(None)):
         latency_ms=int((time.time() - wall_start) * 1000),
     )
 
-    # ─── STREAMING (content chunks only, no tool call in stream path yet) ──
-    if body.get("stream") and not first_msg.get("function_call"):
+    # ─── Simple streaming path (content only, no tool call) ──
+    if body.get("stream") and not first_msg.function_call:
         def sse_chunks():
-            role_chunk = {
-                "id": envelope["id"],
-                "object": "chat.completion.chunk",
-                "created": envelope["created"],
-                "model": envelope["model"],
-                "choices": [
+            yield (
+                "data: "
+                + json.dumps(
                     {
-                        "index": 0,
-                        "delta": {"role": "assistant"},
-                        "finish_reason": None,
+                        "id": envelope["id"],
+                        "object": "chat.completion.chunk",
+                        "created": envelope["created"],
+                        "model": envelope["model"],
+                        "choices": [
+                            {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                        ],
                     }
-                ],
-            }
-            yield f"data: {json.dumps(role_chunk)}\n\n"
+                )
+                + "\n\n"
+            )
 
             for part in itertools.islice(
                 (reply_content[i : i + 40] for i in range(0, len(reply_content), 40)),
                 None,
             ):
-                chunk = {
-                    "id": envelope["id"],
-                    "object": "chat.completion.chunk",
-                    "created": envelope["created"],
-                    "model": envelope["model"],
-                    "choices": [
+                yield (
+                    "data: "
+                    + json.dumps(
                         {
-                            "index": 0,
-                            "delta": {"content": part},
-                            "finish_reason": None,
+                            "id": envelope["id"],
+                            "object": "chat.completion.chunk",
+                            "created": envelope["created"],
+                            "model": envelope["model"],
+                            "choices": [
+                                {"index": 0, "delta": {"content": part}, "finish_reason": None}
+                            ],
                         }
-                    ],
-                }
-                yield f"data: {json.dumps(chunk)}\n\n"
+                    )
+                    + "\n\n"
+                )
 
-            final = {
-                "id": envelope["id"],
-                "object": "chat.completion.chunk",
-                "created": envelope["created"],
-                "model": envelope["model"],
-                "choices": [
-                    {"index": 0, "delta": {}, "finish_reason": "stop"}
-                ],
-            }
-            yield f"data: {json.dumps(final)}\n\n"
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "id": envelope["id"],
+                        "object": "chat.completion.chunk",
+                        "created": envelope["created"],
+                        "model": envelope["model"],
+                        "choices": [
+                            {"index": 0, "delta": {}, "finish_reason": "stop"}
+                        ],
+                    }
+                )
+                + "\n\n"
+            )
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(sse_chunks(), media_type="text/event-stream")
 
-    # ─── SINGLE-SHOT RESPONSE ─────────────────────────────────
     return JSONResponse(envelope)
+
