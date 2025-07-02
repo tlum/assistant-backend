@@ -1,33 +1,34 @@
 # apps/mediator/main.py
-# MediatorAgent – exposes POST /v1/chat/completions (OpenAI-style)
+# MediatorAgent – POST /v1/chat/completions (OpenAI-style w/ optional streaming)
 
-import os, asyncio, uuid, logging, time
+import os, asyncio, uuid, logging, time, itertools, json
 from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Request, Header, HTTPException
-from libs.bus import publish, subscribe_once        # already in repo
-from libs.llm import chat                           # already in repo
+from fastapi.responses import JSONResponse, StreamingResponse
+
+from libs.bus import publish, subscribe_once
+from libs.llm import chat
 from libs import tracer
 from tiktoken import get_encoding
+
 enc = get_encoding("cl100k_base")
 
-# ──────────────────────────────────────────────────────────────
-# CONFIG
-MEDIATOR_API_KEY: str = os.getenv("MEDIATOR_API_KEY", "")
+# ───────────────────────── CONFIG ────────────────────────────
+MEDIATOR_API_KEY = os.getenv("MEDIATOR_API_KEY", "")
 if not MEDIATOR_API_KEY:
-    raise RuntimeError("MEDIATOR_API_KEY env-var not set (secret mount missing)")
+    raise RuntimeError("MEDIATOR_API_KEY env-var not set")
 
-GATHER_TIMEOUT_SEC: float = 0.4
+GATHER_TIMEOUT_SEC = 0.4
 log = logging.getLogger("mediator")
 app = FastAPI()
-# ──────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 
 
 async def gather_agent_notes(corr_id: str) -> str:
-    """Collect AGENT_NOTE events for a short window."""
     notes: List[str] = []
 
-    async def _collect() -> None:
+    async def _collect():
         async for evt in subscribe_once(corr_id):
             if evt.get("type", "").startswith("AGENT_NOTE"):
                 notes.append(evt["payload"])
@@ -36,85 +37,52 @@ async def gather_agent_notes(corr_id: str) -> str:
         await asyncio.wait_for(_collect(), timeout=GATHER_TIMEOUT_SEC)
     except asyncio.TimeoutError:
         pass
-
     return "\n".join(f"- {n}" for n in notes)
 
 
 def _require_api_key(authorization: Optional[str]) -> None:
-    """Raise 401 unless Authorization: Bearer <token> matches secret."""
     token = authorization.removeprefix("Bearer ").strip() if authorization else ""
     if token != MEDIATOR_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 def _extract_user_message(body: Dict[str, Any]) -> str:
-    """
-    Return the content of the last 'user' role in body['messages'].
-    Vapi sends messages = [system, assistant?, user]
-    """
-    for msg in reversed(body["messages"]):
-        if msg["role"] == "user":
+    for msg in reversed(body.get("messages", [])):
+        if msg.get("role") == "user":
             return msg["content"]
     raise HTTPException(status_code=422, detail="No user message found")
 
 
 @app.post("/v1/chat/completions")
-async def completions(
-    req: Request,
-    authorization: str | None = Header(None),
-):
-    # 0 ▸ baseline trace doc
+async def completions(req: Request, authorization: str | None = Header(None)):
     trace_id = tracer.new_id()
-    t0 = time.time()
+    wall_start = time.time()
 
-    # 1 ▸ API-key auth
     _require_api_key(authorization)
 
-    # 2 ▸ Parse request body
     body: Dict[str, Any] = await req.json()
-    user_msg: str = _extract_user_message(body)
-
+    user_msg = _extract_user_message(body)
     tracer.write("mediator_calls", trace_id, vapi_request=body)
 
-    corr_id: str = str(uuid.uuid4())
+    corr_id = uuid.uuid4().hex
+    await publish({"id": corr_id, "type": "NEW_USER_MSG", "payload": {"text": user_msg}})
 
-    # 3 ▸ Fan-out the user message
-    await publish(
-        {
-            "id": corr_id,
-            "type": "NEW_USER_MSG",
-            "payload": {"text": user_msg},
-        }
-    )
+    notes = await gather_agent_notes(corr_id)
 
-    # 4 ▸ Collect helper-agent notes (non-blocking)
-    notes: str = await gather_agent_notes(corr_id)
-
-    # 5 ▸ Synthesize reply
     prompt = (
         f"User said:\n{user_msg}\n\n"
         f"Helper notes:\n{notes or '(none)'}\n\n"
         "Craft the best single-turn assistant reply."
     )
-
-    # — log prompt sent to OpenAI
     tracer.write("openai_calls", trace_id, prompt=prompt)
 
-    reply: str = await chat(prompt)
-
-    # — log OpenAI raw reply (we only have text; no usage yet)
+    reply = await chat(prompt)
     tracer.write("openai_calls", trace_id, reply=reply)
 
-    # 6 ▸ Publish BOT_REPLY for logging / other consumers
-    await publish(
-        {
-            "id": corr_id,
-            "type": "BOT_REPLY",
-            "payload": {"text": reply},
-        }
-    )
+    # re-broadcast final bot reply
+    await publish({"id": corr_id, "type": "BOT_REPLY", "payload": {"text": reply}})
 
-    # token counts (rough)  – replace with real tokenizer later
+    # token counts (approx)
     prompt_t = len(enc.encode(prompt))
     completion_t = len(enc.encode(reply))
 
@@ -122,7 +90,7 @@ async def completions(
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
         "created": int(time.time()),
-        "model": "mediator-v0.1",          # your internal model tag
+        "model": "mediator-v0.1",
         "choices": [
             {
                 "index": 0,
@@ -140,10 +108,7 @@ async def completions(
             "prompt_tokens": prompt_t,
             "completion_tokens": completion_t,
             "total_tokens": prompt_t + completion_t,
-            "prompt_tokens_details": {
-                "cached_tokens": 0,
-                "audio_tokens": 0,
-            },
+            "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
             "completion_tokens_details": {
                 "reasoning_tokens": 0,
                 "audio_tokens": 0,
@@ -153,12 +118,56 @@ async def completions(
         },
         "service_tier": "default",
     }
-    
+
     tracer.write(
         "mediator_calls",
         trace_id,
         vapi_response=envelope,
-        latency_ms=int((time.time() - t0) * 1000),
+        latency_ms=int((time.time() - wall_start) * 1000),
     )
 
-    return envelope
+    # ─── STREAMING RESPONSE ───────────────────────────────────
+    if body.get("stream"):
+        def sse_chunks():
+            role_chunk = {
+                "id": envelope["id"],
+                "object": "chat.completion.chunk",
+                "created": envelope["created"],
+                "model": envelope["model"],
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                ],
+            }
+            yield f"data: {json.dumps(role_chunk)}\n\n"
+
+            for part in itertools.islice(
+                (reply[i : i + 40] for i in range(0, len(reply), 40)), None
+            ):
+                chunk = {
+                    "id": envelope["id"],
+                    "object": "chat.completion.chunk",
+                    "created": envelope["created"],
+                    "model": envelope["model"],
+                    "choices": [
+                        {"index": 0, "delta": {"content": part}, "finish_reason": None}
+                    ],
+                }
+                yield f"data: {json.dumps(chunk)}\n\n"
+
+            final = {
+                "id": envelope["id"],
+                "object": "chat.completion.chunk",
+                "created": envelope["created"],
+                "model": envelope["model"],
+                "choices": [
+                    {"index": 0, "delta": {}, "finish_reason": "stop"}
+                ],
+            }
+            yield f"data: {json.dumps(final)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(sse_chunks(), media_type="text/event-stream")
+
+    # ─── SINGLE-SHOT RESPONSE ─────────────────────────────────
+    return JSONResponse(envelope)
+
