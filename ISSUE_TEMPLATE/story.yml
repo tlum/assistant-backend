@@ -1,0 +1,27 @@
+name: "✨ Feature Story"
+description: User‑facing capability or epic slice
+labels: ["enhancement", "story"]
+title: "[Story] <short description>"
+assignees: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / value statement
+      placeholder: "As a user, I want … so that …"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution / definition of done
+      placeholder: High‑level behaviour, sub‑tasks or acceptance criteria
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes / links
+      placeholder: Design doc section, Slack thread, screenshots…
+    validations:
+      required: false

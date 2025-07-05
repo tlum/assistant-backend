@@ -1,0 +1,42 @@
+name: "\U0001F41B Bug"
+description: Report something that isn’t working as expected
+labels: ["bug"]
+title: "[Bug] <short description>"
+assignees: []
+body:
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. …
+      value: "1. "
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      value: ""
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour / logs
+      value: ""
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - S1 ‑ critical outage
+        - S2 ‑ degraded path
+        - S3 ‑ minor glitch
+        - S4 ‑ cosmetic
+    validations:
+      required: true

@@ -1,0 +1,23 @@
+name: "\U0001F4CB Task"
+description: Small, bounded piece of work (1–2 days)
+labels: ["task"]
+title: "[Task] <short description>"
+assignees: []
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected outcome
+      description: What should exist or be true when this task is complete?
+      placeholder: e.g. "Planner service logs heartbeat to Pub/Sub & Cloud Logging"
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria / test steps
+      placeholder: |
+        - [ ] Given … when … then …
+        - [ ] Unit tests updated
+    validations:
+      required: true

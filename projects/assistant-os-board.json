@@ -1,0 +1,45 @@
+{
+  "name": "Assistant OS – Sprint Board",
+  "fields": [
+    {"name": "Status", "dataType": "single_select"},
+    {"name": "Severity", "dataType": "single_select"}
+  ],
+  "views": [
+    {
+      "name": "Kanban",
+      "layout": "board",
+      "filter": "",
+      "boardColumns": [
+        {"name": "Backlog", "filter": "Status = \"Backlog\""},
+        {"name": "In Progress", "filter": "Status = \"In Progress\""},
+        {"name": "Review", "filter": "Status = \"Review\""},
+        {"name": "Done", "filter": "Status = \"Done\""}
+      ]
+    }
+  ],
+  "itemTemplates": [
+    {
+      "name": "Task default",
+      "fieldValues": [
+        {"fieldName": "Status", "value": "Backlog"}
+      ]
+    }
+  ],
+  "automationRules": [
+    {
+      "name": "Move to In Progress on first commit",
+      "eventType": "ISSUE_COMMITTED",
+      "setFieldValues": [{"fieldName": "Status", "value": "In Progress"}]
+    },
+    {
+      "name": "Move to Review on PR open",
+      "eventType": "PULL_REQUEST_OPENED",
+      "setFieldValues": [{"fieldName": "Status", "value": "Review"}]
+    },
+    {
+      "name": "Move to Done on PR merge",
+      "eventType": "PULL_REQUEST_MERGED",
+      "setFieldValues": [{"fieldName": "Status", "value": "Done"}]
+    }
+  ]
+}
